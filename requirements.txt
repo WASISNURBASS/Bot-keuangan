@@ -1,2 +1,1 @@
-python-telegram-bot
-matplotlib
+python-telegram-bot==20.3
