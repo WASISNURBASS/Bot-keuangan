@@ -43,35 +43,20 @@ CREATE TABLE IF NOT EXISTS hutang (
 """)
 
 conn.commit()
-
 # ================= PARSER =================
 def parse_input(text):
     text = text.lower()
-if text.lower() == "saldo":
-    return
-
-if text.lower() == "laporan":
-    await laporan(update, context)
-    return
-
-if text.lower() == "hutang":
-    await hutang_list(update, context)
-    return
 
     angka = re.findall(r'\d+', text)
     jumlah = int(angka[0]) if angka else 0
 
+    # konversi
     if "jt" in text:
         jumlah *= 1_000_000
-    elif "k" in text:
+    elif "k" in text or "ribu" in text:
         jumlah *= 1000
-    if tipe == "hutang" and jumlah == 0:
-        await update.message.reply_text("❌ Masukkan jumlah hutang!\nContoh: hutang riska 100k")
-    return
-    if jumlah == 0 and tipe in ["income", "expense"]:
-        await update.message.reply_text("❌ Masukkan jumlah uang!\nContoh: makan 20k")
-    return
 
+    # tipe transaksi
     if any(x in text for x in ["gaji", "bonus", "masuk"]):
         tipe = "income"
     elif "hutang" in text:
@@ -81,6 +66,7 @@ if text.lower() == "hutang":
     else:
         tipe = "expense"
 
+    # ambil nama (khusus hutang)
     words = text.split()
     nama = None
     if "hutang" in words:
@@ -90,6 +76,7 @@ if text.lower() == "hutang":
             pass
 
     return tipe, jumlah, text, nama
+
 
 # ================= COMMAND =================
 
