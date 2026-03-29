@@ -1,0 +1,6 @@
+.cache/
+.bash_history
+.ssh/
+.termux/
+*.db
+__pycache__/
