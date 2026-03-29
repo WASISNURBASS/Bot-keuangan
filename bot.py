@@ -2,26 +2,16 @@ import os
 import re
 import sqlite3
 from datetime import datetime
+import matplotlib.pyplot as plt
+
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
-TOKEN = os.getenv("TOKEN")  # untuk deploy
+TOKEN = os.getenv("TOKEN")
 
 # ================= DATABASE =================
 conn = sqlite3.connect("finance.db", check_same_thread=False)
 cursor = conn.cursor()
-
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS transaksi (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
-    type TEXT,
-    category TEXT,
-    amount INTEGER,
-    note TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-)
-""")
 
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS users (
@@ -31,15 +21,28 @@ CREATE TABLE IF NOT EXISTS users (
 """)
 
 cursor.execute("""
-CREATE TABLE IF NOT EXISTS debt (
+CREATE TABLE IF NOT EXISTS transaksi (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER,
-    name TEXT,
+    type TEXT,
+    amount INTEGER,
+    note TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+""")
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS hutang (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    nama TEXT,
     amount INTEGER,
     status TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 )
 """)
+
+conn.commit()
 
 # ================= PARSER =================
 def parse_input(text):
@@ -50,7 +53,7 @@ def parse_input(text):
 
     if "jt" in text:
         jumlah *= 1_000_000
-    elif "k" in text or "ribu" in text:
+    elif "k" in text:
         jumlah *= 1000
 
     if any(x in text for x in ["gaji", "bonus", "masuk"]):
@@ -58,80 +61,108 @@ def parse_input(text):
     elif "hutang" in text:
         tipe = "hutang"
     elif "bayar" in text:
-        tipe = "piutang"
+        tipe = "bayar"
     else:
         tipe = "expense"
 
-    kategori = text.split()[0]
-
-    nama = "umum"
     words = text.split()
+    nama = None
     if "hutang" in words:
         try:
             nama = words[words.index("hutang") + 1]
         except:
             pass
 
-    return tipe, kategori, jumlah, text, nama
+    return tipe, jumlah, text, nama
 
 # ================= COMMAND =================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🤖 Bot Keuangan Aktif\n\n/setsaldo 1000000")
 
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🤖 Bot Keuangan Aktif!\n\n/setsaldo 100000")
+
+# SET SALDO
 async def setsaldo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     saldo = int(context.args[0])
 
     cursor.execute("""
-        INSERT INTO users (user_id, balance)
-        VALUES (?, ?)
-        ON CONFLICT(user_id) DO UPDATE SET balance=excluded.balance
-    """, (user_id, saldo))
+    INSERT INTO users (user_id, balance)
+    VALUES (?, ?)
+    ON CONFLICT(user_id) DO UPDATE SET balance=?
+    """, (user_id, saldo, saldo))
     conn.commit()
 
-    await update.message.reply_text(f"💰 Saldo: Rp{saldo:,}")
+    await update.message.reply_text(f"💰 Saldo diset: Rp{saldo:,}")
 
+# CEK SALDO
 async def saldo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
 
     cursor.execute("SELECT balance FROM users WHERE user_id=?", (user_id,))
-    saldo = cursor.fetchone()
-    saldo = saldo[0] if saldo else 0
+    row = cursor.fetchone()
 
-    await update.message.reply_text(f"💰 Saldo: Rp{saldo:,}")
+    saldo = row[0] if row else 0
 
-async def hutang(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(f"💰 Saldo sekarang: Rp{saldo:,}")
+
+# HUTANG LIST
+async def hutang_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
 
-    cursor.execute("SELECT name, amount FROM debt WHERE user_id=? AND status='belum'", (user_id,))
+    cursor.execute("""
+    SELECT nama, amount, created_at FROM hutang
+    WHERE user_id=? AND status='belum'
+    """, (user_id,))
+
     rows = cursor.fetchall()
 
     if not rows:
-        await update.message.reply_text("Tidak ada hutang")
+        await update.message.reply_text("✅ Tidak ada hutang")
         return
 
-    text = "💳 Hutang:\n"
+    text = "📌 Hutang belum dibayar:\n\n"
     for r in rows:
-        text += f"{r[0]} - Rp{r[1]:,}\n"
+        text += f"{r[0]} - Rp{r[1]:,} ({r[2][:10]})\n"
 
     await update.message.reply_text(text)
 
-async def bayar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# LAPORAN
+async def laporan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
-    nama = context.args[0]
+    bulan = datetime.now().strftime("%Y-%m")
 
-    cursor.execute("UPDATE debt SET status='lunas' WHERE user_id=? AND name=?", (user_id, nama))
-    conn.commit()
+    cursor.execute("""
+    SELECT SUM(amount) FROM transaksi
+    WHERE user_id=? AND type='income'
+    AND strftime('%Y-%m', created_at)=?
+    """, (user_id, bulan))
+    income = cursor.fetchone()[0] or 0
 
-    await update.message.reply_text("Lunas!")
+    cursor.execute("""
+    SELECT SUM(amount) FROM transaksi
+    WHERE user_id=? AND type='expense'
+    AND strftime('%Y-%m', created_at)=?
+    """, (user_id, bulan))
+    expense = cursor.fetchone()[0] or 0
 
+    laba = income - expense
+
+    await update.message.reply_text(
+        f"📊 Laporan {bulan}\n\n"
+        f"💰 Income: Rp{income:,}\n"
+        f"💸 Expense: Rp{expense:,}\n"
+        f"📈 Laba: Rp{laba:,}"
+    )
+
+# GRAFIK
 async def grafik(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
 
     cursor.execute("""
-        SELECT category, SUM(amount) FROM transaksi
-        WHERE user_id=? AND type='expense'
-        GROUP BY category
+    SELECT DATE(created_at), SUM(amount)
+    FROM transaksi
+    WHERE user_id=?
+    GROUP BY DATE(created_at)
     """, (user_id,))
 
     data = cursor.fetchall()
@@ -140,61 +171,83 @@ async def grafik(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Tidak ada data")
         return
 
-    text = "📊 Pengeluaran:\n\n"
-    total = sum([d[1] for d in data])
+    tanggal = [d[0] for d in data]
+    jumlah = [d[1] for d in data]
 
-    for kategori, jumlah in data:
-        bar = "█" * int((jumlah / total) * 10)
-        text += f"{kategori}: {bar} Rp{jumlah:,}\n"
+    plt.figure()
+    plt.plot(tanggal, jumlah)
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.savefig("grafik.png")
 
-    await update.message.reply_text(text)
+    await update.message.reply_photo(photo=open("grafik.png", "rb"))
 
-# ================= HANDLER =================
+# HANDLE CHAT
 async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     text = update.message.text
 
-    tipe, kategori, jumlah, note, nama = parse_input(text)
+    tipe, jumlah, note, nama = parse_input(text)
 
+    # ambil saldo
     cursor.execute("SELECT balance FROM users WHERE user_id=?", (user_id,))
-    saldo = cursor.fetchone()
-    saldo = saldo[0] if saldo else 0
+    row = cursor.fetchone()
+    saldo = row[0] if row else 0
 
-    if tipe == "expense":
-        saldo -= jumlah
-    elif tipe == "income":
+    if tipe == "income":
         saldo += jumlah
+
+    elif tipe == "expense":
+        saldo -= jumlah
+
     elif tipe == "hutang":
-        saldo += jumlah
-        cursor.execute("INSERT INTO debt (user_id, name, amount, status) VALUES (?, ?, ?, 'belum')",
-                       (user_id, nama, jumlah))
-    elif tipe == "piutang":
-        saldo -= jumlah
+        cursor.execute("""
+        INSERT INTO hutang (user_id, nama, amount, status)
+        VALUES (?, ?, ?, 'belum')
+        """, (user_id, nama, jumlah))
+        conn.commit()
+
+        await update.message.reply_text(f"🧾 Hutang {nama} Rp{jumlah:,}")
+        return
+
+    elif tipe == "bayar":
+        cursor.execute("""
+        UPDATE hutang SET status='lunas'
+        WHERE user_id=? AND nama=?
+        """, (user_id, nama))
+        conn.commit()
+
+        await update.message.reply_text(f"✅ Hutang {nama} lunas")
+        return
+
+    # simpan transaksi
+    cursor.execute("""
+    INSERT INTO transaksi (user_id, type, amount, note)
+    VALUES (?, ?, ?, ?)
+    """, (user_id, tipe, jumlah, note))
 
     cursor.execute("""
-        INSERT INTO users (user_id, balance)
-        VALUES (?, ?)
-        ON CONFLICT(user_id) DO UPDATE SET balance=excluded.balance
-    """, (user_id, saldo))
-
-    cursor.execute("INSERT INTO transaksi (user_id, type, category, amount, note) VALUES (?, ?, ?, ?, ?)",
-                   (user_id, tipe, kategori, jumlah, note))
+    INSERT INTO users (user_id, balance)
+    VALUES (?, ?)
+    ON CONFLICT(user_id) DO UPDATE SET balance=?
+    """, (user_id, saldo, saldo))
 
     conn.commit()
 
-    await update.message.reply_text(f"✅ {kategori} Rp{jumlah:,}\n💰 Saldo: Rp{saldo:,}")
+    await update.message.reply_text(
+        f"✅ {tipe} Rp{jumlah:,}\n💰 Saldo: Rp{saldo:,}"
+    )
 
-# ================= APP =================
+# ================= RUN =================
 app = ApplicationBuilder().token(TOKEN).build()
 
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("setsaldo", setsaldo))
 app.add_handler(CommandHandler("saldo", saldo))
-app.add_handler(CommandHandler("hutang", hutang))
-app.add_handler(CommandHandler("bayar", bayar))
+app.add_handler(CommandHandler("hutang", hutang_list))
+app.add_handler(CommandHandler("laporan", laporan))
 app.add_handler(CommandHandler("grafik", grafik))
+
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
 
-if __name__ == "__main__":
-    print("Bot jalan...")
-    app.run_polling()
+app.run_polling()
