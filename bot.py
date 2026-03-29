@@ -48,7 +48,6 @@ conn.commit()
 def parse_input(text):
     text = text.lower()
 if text.lower() == "saldo":
-    await saldo(update, context)
     return
 
 if text.lower() == "laporan":
