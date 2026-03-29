@@ -70,7 +70,7 @@ if text.lower() == "hutang":
         await update.message.reply_text("❌ Masukkan jumlah hutang!\nContoh: hutang riska 100k")
     return
     if jumlah == 0 and tipe in ["income", "expense"]:
-    await update.message.reply_text("❌ Masukkan jumlah uang!\nContoh: makan 20k")
+        await update.message.reply_text("❌ Masukkan jumlah uang!\nContoh: makan 20k")
     return
 
     if any(x in text for x in ["gaji", "bonus", "masuk"]):
