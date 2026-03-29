@@ -47,6 +47,17 @@ conn.commit()
 # ================= PARSER =================
 def parse_input(text):
     text = text.lower()
+    if text.lower() == "saldo":
+    await saldo(update, context)
+    return
+
+if text.lower() == "laporan":
+    await laporan(update, context)
+    return
+
+if text.lower() == "hutang":
+    await hutang_list(update, context)
+    return
 
     angka = re.findall(r'\d+', text)
     jumlah = int(angka[0]) if angka else 0
