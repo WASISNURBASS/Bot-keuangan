@@ -9,7 +9,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 # ================= TOKEN =================
 TOKEN = os.getenv("TOKEN")
 
-# FIX conflict
+# FIX TELEGRAM CONFLICT
 requests.get(f"https://api.telegram.org/bot{TOKEN}/deleteWebhook")
 
 # ================= DATABASE =================
@@ -126,19 +126,57 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text("🔥 Semua data direset!")
 
+# ================= LAPORAN =================
+async def laporan(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+
+    now = datetime.now().strftime("%Y-%m")
+
+    cursor.execute("""
+    SELECT type, SUM(amount) FROM transaksi 
+    WHERE user_id=? AND strftime('%Y-%m', created_at)=?
+    GROUP BY type
+    """, (user_id, now))
+
+    data = cursor.fetchall()
+
+    income = 0
+    expense = 0
+
+    for tipe, jumlah in data:
+        if tipe == "income":
+            income = jumlah
+        elif tipe == "expense":
+            expense = jumlah
+
+    laba = income - expense
+
+    await update.message.reply_text(
+        f"📊 Laporan {now}\n\n"
+        f"💰 Income: Rp{income:,}\n"
+        f"💸 Expense: Rp{expense:,}\n"
+        f"📈 Laba: Rp{laba:,}"
+    )
+
 # ================= MESSAGE HANDLER =================
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     text = update.message.text.lower()
 
-    # SALDO
+    # AUTO CREATE USER
+    cursor.execute("INSERT OR IGNORE INTO users (user_id, balance) VALUES (?, 0)", (user_id,))
+
+    # COMMAND TEXT
     if text == "saldo":
         await saldo(update, context)
         return
 
-    # HUTANG LIST
     if text == "hutang":
         await hutang_list(update, context)
+        return
+
+    if text == "laporan":
+        await laporan(update, context)
         return
 
     jumlah = parse_amount(text)
