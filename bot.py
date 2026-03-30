@@ -108,142 +108,206 @@ async def hapus_terakhir(update,context):
 
 # ================= HANDLE =================
 async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid=update.message.from_user.id
-    text=update.message.text.lower()
+    uid = update.message.from_user.id
+    text = update.message.text.lower()
 
-    cursor.execute("INSERT OR IGNORE INTO users VALUES (?,0)",(uid,))
+    cursor.execute("INSERT OR IGNORE INTO users VALUES (?,0)", (uid,))
 
-    jumlah=parse_amount(text)
-    saldo_awal=get_saldo(uid)
+    jumlah = parse_amount(text)
+    saldo_awal = get_saldo(uid)
+    saldo_akhir = saldo_awal  # FIX WAJIB
 
-    words=text.split()
-    person=None
-    barang=None
-    kategori="lainnya"
+    words = text.split()
+    person = None
+    barang = None
+    kategori = "lainnya"
 
-    # ORANG
+    # ===== DETEKSI ORANG =====
     if "ke" in words:
-        try: person=words[words.index("ke")+1]
-        except: pass
+        try:
+            person = words[words.index("ke") + 1]
+        except:
+            pass
+
     if "dari" in words:
-        try: person=words[words.index("dari")+1]
-        except: pass
+        try:
+            person = words[words.index("dari") + 1]
+        except:
+            pass
 
-    # BARANG
+    # ===== DETEKSI BARANG =====
     if "beli" in words or "jual" in words:
-        try: barang=words[1]
-        except: pass
+        try:
+            barang = words[1]
+        except:
+            pass
 
-    # KATEGORI
-    if any(x in text for x in ["makan","minum"]):
-        kategori="makanan"
+    # ===== KATEGORI =====
+    if any(x in text for x in ["makan", "minum"]):
+        kategori = "makanan"
 
     # ================= HUTANG =================
     if "hutang" in text and "bayar" not in text:
-        nama=words[words.index("hutang")+1]
-        cursor.execute("INSERT INTO debt VALUES(NULL,?,?,?,CURRENT_TIMESTAMP)",(uid,nama,jumlah))
+        try:
+            nama = words[words.index("hutang") + 1]
+        except:
+            return await update.message.reply_text("contoh: hutang budi 100k")
+
+        cursor.execute(
+            "INSERT INTO debt VALUES(NULL,?,?,?,CURRENT_TIMESTAMP)",
+            (uid, nama, jumlah),
+        )
         conn.commit()
+
         return await update.message.reply_text(f"🧾 Hutang {nama} Rp{jumlah:,}")
 
     if "bayar" in text and "hutang" in text:
-        nama=words[words.index("hutang")+1]
-        cursor.execute("INSERT INTO debt VALUES(NULL,?,?,?,CURRENT_TIMESTAMP)",(uid,nama,-jumlah))
+        try:
+            nama = words[words.index("hutang") + 1]
+        except:
+            return await update.message.reply_text("contoh: bayar hutang budi 50k")
+
+        cursor.execute(
+            "INSERT INTO debt VALUES(NULL,?,?,?,CURRENT_TIMESTAMP)",
+            (uid, nama, -jumlah),
+        )
         conn.commit()
+
         return await update.message.reply_text(f"💸 Bayar hutang {nama} Rp{jumlah:,}")
 
     # ================= TRANSFER MASUK =================
-    if "dari" in text:
-        saldo_akhir=saldo_awal+jumlah
-        set_saldo(uid,saldo_akhir)
-
-        cursor.execute("INSERT INTO transaksi VALUES(NULL,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)",
-                       (uid,"income",jumlah,text,person,None,"transfer"))
-        conn.commit()
-
-        return await update.message.reply_text(
-            f"💰 Dari {person}\nNominal: Rp{jumlah:,}\nSaldo awal: Rp{saldo_awal:,}\n+ Rp{jumlah:,}\nSaldo akhir: Rp{saldo_akhir:,}"
-        )
-
-    # ================= TRANSFER KELUAR =================
-    if "ke" in text:
-        saldo_akhir=saldo_awal-jumlah
-        set_saldo(uid,saldo_akhir)
-
-        cursor.execute("INSERT INTO transaksi VALUES(NULL,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)",
-                       (uid,"expense",jumlah,text,person,None,"transfer"))
-        conn.commit()
-
-        return await update.message.reply_text(
-            f"💸 Ke {person}\nNominal: Rp{jumlah:,}\nSaldo awal: Rp{saldo_awal:,}\n- Rp{jumlah:,}\nSaldo akhir: Rp{saldo_akhir:,}"
-        )
-
-    # ================= BELI =================
-    if "beli" in text:
-        saldo_akhir=saldo_awal-jumlah
-        set_saldo(uid,saldo_akhir)
-
-        cursor.execute("INSERT INTO transaksi VALUES(NULL,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)",
-                       (uid,"expense",jumlah,text,None,barang,"barang"))
-        conn.commit()
-
-        return await update.message.reply_text(
-            f"📦 Beli {barang}\nRp{jumlah:,}\nSaldo: {saldo_awal:,} → {saldo_akhir:,}"
-        )
-
-    # ================= JUAL =================
-    if "jual" in text:
-        saldo_akhir=saldo_awal+jumlah
-        set_saldo(uid,saldo_akhir)
-
-        cursor.execute("INSERT INTO transaksi VALUES(NULL,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)",
-                       (uid,"income",jumlah,text,None,barang,"barang"))
-        conn.commit()
-
-        return await update.message.reply_text(
-            f"💰 Jual {barang}\nRp{jumlah:,}\nSaldo: {saldo_awal:,} → {saldo_akhir:,}"
-        )
-
-    # ================= EXPENSE =================
-    if any(x in text for x in ["masuk","tambah","gaji","bonus"]):
+    if "dari" in text and jumlah > 0:
         saldo_akhir = saldo_awal + jumlah
         set_saldo(uid, saldo_akhir)
 
-    cursor.execute("""
-    INSERT INTO transaksi(user_id,type,amount,note,kategori)
-    VALUES (?,?,?,?,?)
-    """,(uid,"income",jumlah,text,"income"))
+        cursor.execute("""
+        INSERT INTO transaksi(user_id,type,amount,note,person,kategori)
+        VALUES (?,?,?,?,?,?)
+        """, (uid, "income", jumlah, text, person, "transfer"))
 
-    conn.commit()
-
-    return await update.message.reply_text(
-        f"💰 Uang Masuk\n"
-        f"Nominal: Rp{jumlah:,}\n"
-        f"Saldo awal: Rp{saldo_awal:,}\n"
-        f"+ Rp{jumlah:,}\n"
-        f"Saldo akhir: Rp{saldo_akhir:,}"
-    )
-    if jumlah>0:
-        saldo_akhir=saldo_awal-jumlah
-        set_saldo(uid,saldo_akhir)
-
-        cursor.execute("INSERT INTO transaksi VALUES(NULL,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)",
-                       (uid,"expense",jumlah,text,None,None,kategori))
         conn.commit()
 
         return await update.message.reply_text(
-            f"💸 {kategori}\nRp{jumlah:,}\nSaldo: {saldo_awal:,} → {saldo_akhir:,}"
+            f"💰 Transfer Masuk dari {person}\n"
+            f"Nominal: Rp{jumlah:,}\n"
+            f"Saldo awal: Rp{saldo_awal:,}\n"
+            f"+ Rp{jumlah:,}\n"
+            f"Saldo akhir: Rp{saldo_akhir:,}"
+        )
+
+    # ================= TRANSFER KELUAR =================
+    if "ke" in text and jumlah > 0:
+        saldo_akhir = saldo_awal - jumlah
+        set_saldo(uid, saldo_akhir)
+
+        cursor.execute("""
+        INSERT INTO transaksi(user_id,type,amount,note,person,kategori)
+        VALUES (?,?,?,?,?,?)
+        """, (uid, "expense", jumlah, text, person, "transfer"))
+
+        conn.commit()
+
+        return await update.message.reply_text(
+            f"💸 Transfer ke {person}\n"
+            f"Nominal: Rp{jumlah:,}\n"
+            f"Saldo awal: Rp{saldo_awal:,}\n"
+            f"- Rp{jumlah:,}\n"
+            f"Saldo akhir: Rp{saldo_akhir:,}"
+        )
+
+    # ================= INCOME (UMUM) =================
+    if any(x in text for x in ["masuk", "tambah", "gaji", "bonus", "isi", "topup"]) and jumlah > 0:
+        saldo_akhir = saldo_awal + jumlah
+        set_saldo(uid, saldo_akhir)
+
+        cursor.execute("""
+        INSERT INTO transaksi(user_id,type,amount,note,kategori)
+        VALUES (?,?,?,?,?)
+        """, (uid, "income", jumlah, text, "income"))
+
+        conn.commit()
+
+        return await update.message.reply_text(
+            f"💰 Uang Masuk\n"
+            f"Nominal: Rp{jumlah:,}\n"
+            f"Saldo awal: Rp{saldo_awal:,}\n"
+            f"+ Rp{jumlah:,}\n"
+            f"Saldo akhir: Rp{saldo_akhir:,}"
+        )
+
+    # ================= BELI =================
+    if "beli" in text and jumlah > 0:
+        saldo_akhir = saldo_awal - jumlah
+        set_saldo(uid, saldo_akhir)
+
+        cursor.execute("""
+        INSERT INTO transaksi(user_id,type,amount,note,barang,kategori)
+        VALUES (?,?,?,?,?,?)
+        """, (uid, "expense", jumlah, text, barang, "barang"))
+
+        conn.commit()
+
+        return await update.message.reply_text(
+            f"📦 Beli {barang}\n"
+            f"Nominal: Rp{jumlah:,}\n"
+            f"Saldo awal: Rp{saldo_awal:,}\n"
+            f"- Rp{jumlah:,}\n"
+            f"Saldo akhir: Rp{saldo_akhir:,}"
+        )
+
+    # ================= JUAL =================
+    if "jual" in text and jumlah > 0:
+        saldo_akhir = saldo_awal + jumlah
+        set_saldo(uid, saldo_akhir)
+
+        cursor.execute("""
+        INSERT INTO transaksi(user_id,type,amount,note,barang,kategori)
+        VALUES (?,?,?,?,?,?)
+        """, (uid, "income", jumlah, text, barang, "barang"))
+
+        conn.commit()
+
+        return await update.message.reply_text(
+            f"💰 Jual {barang}\n"
+            f"Nominal: Rp{jumlah:,}\n"
+            f"Saldo awal: Rp{saldo_awal:,}\n"
+            f"+ Rp{jumlah:,}\n"
+            f"Saldo akhir: Rp{saldo_akhir:,}"
+        )
+
+    # ================= EXPENSE =================
+    if jumlah > 0:
+        saldo_akhir = saldo_awal - jumlah
+        set_saldo(uid, saldo_akhir)
+
+        cursor.execute("""
+        INSERT INTO transaksi(user_id,type,amount,note,kategori)
+        VALUES (?,?,?,?,?)
+        """, (uid, "expense", jumlah, text, kategori))
+
+        conn.commit()
+
+        return await update.message.reply_text(
+            f"💸 Pengeluaran ({kategori})\n"
+            f"Nominal: Rp{jumlah:,}\n"
+            f"Saldo awal: Rp{saldo_awal:,}\n"
+            f"- Rp{jumlah:,}\n"
+            f"Saldo akhir: Rp{saldo_akhir:,}"
         )
 
     # ================= LAPORAN =================
     if "laporan" in text:
         cursor.execute("SELECT name,amount,created_at FROM debt WHERE user_id=?", (uid,))
-        hut=""
-        for n,a,d in cursor.fetchall():
-            dt=datetime.fromisoformat(d)
-            hut+=f"- {n} Rp{a:,} ({dt.strftime('%d %b')})\n"
+        hutang = ""
+
+        for n, a, d in cursor.fetchall():
+            dt = datetime.fromisoformat(d)
+            hutang += f"- {n} Rp{a:,} ({dt.strftime('%d %b')})\n"
 
         return await update.message.reply_text(
-            f"📊 LAPORAN\n\n💰 Saldo: Rp{get_saldo(uid):,}\n\n💳 Hutang:\n{hut}"
+            f"📊 LAPORAN\n\n"
+            f"💰 Saldo: Rp{get_saldo(uid):,}\n\n"
+            f"💳 Hutang:\n{hutang}"
         )
 
 # ================= MAIN =================
