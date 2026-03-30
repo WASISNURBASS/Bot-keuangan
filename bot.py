@@ -165,16 +165,16 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
         GROUP BY name
         """, (uid,))
 
-hutang = ""
+        hutang = ""
 
-for n, total in cursor.fetchall():
-    if total > 0:
-        hutang += f"- {n}: Rp{total:,} (BELUM LUNAS)\n"
-    elif total == 0:
-        hutang += f"- {n}: LUNAS ✅\n"
+        for n, total in cursor.fetchall():
+            if total > 0:
+                hutang += f"- {n}: Rp{total:,} (BELUM LUNAS)\n"
+            elif total == 0:
+                hutang += f"- {n}: LUNAS ✅\n"
 
-if hutang == "":
-    hutang = "Tidak ada"
+        if hutang == "":
+            hutang = "Tidak ada"
 
         return await update.message.reply_text(
             f"📊 LAPORAN\n\n"
