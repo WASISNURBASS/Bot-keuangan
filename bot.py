@@ -204,6 +204,24 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     # ================= EXPENSE =================
+    if any(x in text for x in ["masuk","tambah","gaji","bonus"]):
+    saldo_akhir = saldo_awal + jumlah
+    set_saldo(uid, saldo_akhir)
+
+    cursor.execute("""
+    INSERT INTO transaksi(user_id,type,amount,note,kategori)
+    VALUES (?,?,?,?,?)
+    """,(uid,"income",jumlah,text,"income"))
+
+    conn.commit()
+
+    return await update.message.reply_text(
+        f"💰 Uang Masuk\n"
+        f"Nominal: Rp{jumlah:,}\n"
+        f"Saldo awal: Rp{saldo_awal:,}\n"
+        f"+ Rp{jumlah:,}\n"
+        f"Saldo akhir: Rp{saldo_akhir:,}"
+    )
     if jumlah>0:
         saldo_akhir=saldo_awal-jumlah
         set_saldo(uid,saldo_akhir)
