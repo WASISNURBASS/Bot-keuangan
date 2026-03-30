@@ -205,8 +205,8 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ================= EXPENSE =================
     if any(x in text for x in ["masuk","tambah","gaji","bonus"]):
-    saldo_akhir = saldo_awal + jumlah
-    set_saldo(uid, saldo_akhir)
+        saldo_akhir = saldo_awal + jumlah
+        set_saldo(uid, saldo_akhir)
 
     cursor.execute("""
     INSERT INTO transaksi(user_id,type,amount,note,kategori)
