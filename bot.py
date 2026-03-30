@@ -229,38 +229,38 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.commit()
 
         return await update.message.reply_text(f"💰 +Rp{jumlah:,}\n{saldo_awal:,} ➜ {saldo_akhir:,}")
+# ================= AUTO BISNIS =================
+    if "jual" in text and "modal" in text:
+        try:
+            angka = re.findall(r'\d+', text.replace(".", "").replace(",", ""))
+            jual = int(angka[0])
+            modal = int(angka[1])
+        except:
+            return await update.message.reply_text("contoh: jual pulsa 7000 modal 5500")
+
+        profit = jual - modal
+
+        saldo_akhir = saldo_awal + profit
+        set_saldo(uid, saldo_akhir)
+
+        barang = words[1] if len(words) > 1 else "barang"
+
+        cursor.execute("""
+        INSERT INTO transaksi(user_id,type,amount,note,barang,kategori)
+        VALUES (?,?,?,?,?,?)
+        """, (uid, "income", profit, text, barang, "bisnis"))
+
+        conn.commit()
+
+        return await update.message.reply_text(
+            f"📦 {barang}\n"
+            f"Modal: Rp{modal:,}\n"
+            f"Jual: Rp{jual:,}\n"
+            f"🔥 Profit: Rp{profit:,}\n\n"
+            f"Saldo: Rp{saldo_awal:,} ➜ Rp{saldo_akhir:,}"
+        )
 
     # ===== BELI =====
-    # ================= AUTO BISNIS =================
-if "jual" in text and "modal" in text:
-    try:
-        angka = re.findall(r'\d+', text.replace(".", "").replace(",", ""))
-        jual = int(angka[0])
-        modal = int(angka[1])
-    except:
-        return await update.message.reply_text("contoh: jual pulsa 7000 modal 5500")
-
-    profit = jual - modal
-
-    saldo_akhir = saldo_awal + profit
-    set_saldo(uid, saldo_akhir)
-
-    barang = words[1] if len(words) > 1 else "barang"
-
-    cursor.execute("""
-    INSERT INTO transaksi(user_id,type,amount,note,barang,kategori)
-    VALUES (?,?,?,?,?,?)
-    """, (uid, "income", profit, text, barang, "bisnis"))
-
-    conn.commit()
-
-    return await update.message.reply_text(
-        f"📦 {barang}\n"
-        f"Modal: Rp{modal:,}\n"
-        f"Jual: Rp{jual:,}\n"
-        f"🔥 Profit: Rp{profit:,}\n\n"
-        f"Saldo: Rp{saldo_awal:,} ➜ Rp{saldo_akhir:,}"
-    )
     if "beli" in text and jumlah>0:
         saldo_akhir=saldo_awal-jumlah
         set_saldo(uid,saldo_akhir)
@@ -268,6 +268,9 @@ if "jual" in text and "modal" in text:
         cursor.execute("INSERT INTO transaksi(user_id,type,amount,note,barang,kategori) VALUES (?,?,?,?,?,?)",
                        (uid,"expense",jumlah,text,barang,"barang"))
         conn.commit()
+
+        return await update.message.reply_text(f"📦 {barang}\n-Rp{jumlah:,}\n{saldo_awal:,} ➜ {saldo_akhir:,}")
+
 
         return await update.message.reply_text(f"📦 {barang}\n-Rp{jumlah:,}\n{saldo_awal:,} ➜ {saldo_akhir:,}")
 
