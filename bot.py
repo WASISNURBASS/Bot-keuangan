@@ -137,7 +137,7 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if any(x in text for x in ["makan","minum"]):
         kategori="makanan"
 
-    # ===== LAPORAN (FIX DI DALAM HANDLE) =====
+    # ================= LAPORAN =================
     if "laporan" in text:
         cursor.execute("SELECT SUM(amount) FROM transaksi WHERE user_id=? AND type='income'", (uid,))
         income = cursor.fetchone()[0] or 0
@@ -157,7 +157,7 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
             dt=datetime.fromisoformat(d)
             trx+=f"{hari(dt)} Rp{a:,} ({t})\n"
 
-        # ===== HUTANG PER ORANG =====
+        # HUTANG PER ORANG
         cursor.execute("""
         SELECT name, SUM(amount) 
         FROM debt 
@@ -165,16 +165,15 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
         GROUP BY name
         """, (uid,))
 
-        hutang = ""
-
-        for n, total in cursor.fetchall():
+        hutang=""
+        for n,total in cursor.fetchall():
             if total > 0:
                 hutang += f"- {n}: Rp{total:,} (BELUM LUNAS)\n"
             elif total == 0:
                 hutang += f"- {n}: LUNAS ✅\n"
 
-        if hutang == "":
-            hutang = "Tidak ada"
+        if hutang=="":
+            hutang="Tidak ada"
 
         return await update.message.reply_text(
             f"📊 LAPORAN\n\n"
@@ -183,10 +182,10 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📉 Expense: Rp{expense:,}\n"
             f"🔥 Laba: Rp{laba:,}\n\n"
             f"🧾 Transaksi:\n{trx}\n"
-            f"💳 Hutang:\n{hutang if hutang else 'Tidak ada'}"
+            f"💳 Hutang:\n{hutang}"
         )
 
-    # ===== HUTANG =====
+    # ================= HUTANG =================
     if "hutang" in text and "bayar" not in text:
         try:
             nama = words[words.index("hutang")+1]
@@ -207,43 +206,7 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.commit()
         return await update.message.reply_text(f"💸 Bayar hutang {nama} Rp{jumlah:,}")
 
-    # ===== TRANSFER MASUK =====
-    if "dari" in text and jumlah>0:
-        saldo_akhir=saldo_awal+jumlah
-        set_saldo(uid,saldo_akhir)
-
-        cursor.execute("INSERT INTO transaksi(user_id,type,amount,note,person,kategori) VALUES (?,?,?,?,?,?)",
-                       (uid,"income",jumlah,text,person,"transfer"))
-        conn.commit()
-
-        return await update.message.reply_text(
-            f"💰 Dari {person}\nRp{jumlah:,}\n{saldo_awal:,} ➜ {saldo_akhir:,}"
-        )
-
-    # ===== TRANSFER KELUAR =====
-    if "ke" in text and jumlah>0:
-        saldo_akhir=saldo_awal-jumlah
-        set_saldo(uid,saldo_akhir)
-
-        cursor.execute("INSERT INTO transaksi(user_id,type,amount,note,person,kategori) VALUES (?,?,?,?,?,?)",
-                       (uid,"expense",jumlah,text,person,"transfer"))
-        conn.commit()
-
-        return await update.message.reply_text(
-            f"💸 Ke {person}\nRp{jumlah:,}\n{saldo_awal:,} ➜ {saldo_akhir:,}"
-        )
-
-    # ===== INCOME =====
-    if any(x in text for x in ["masuk","gaji","bonus","tambah"]) and jumlah>0:
-        saldo_akhir=saldo_awal+jumlah
-        set_saldo(uid,saldo_akhir)
-
-        cursor.execute("INSERT INTO transaksi(user_id,type,amount,note,kategori) VALUES (?,?,?,?,?)",
-                       (uid,"income",jumlah,text,"income"))
-        conn.commit()
-
-        return await update.message.reply_text(f"💰 +Rp{jumlah:,}\n{saldo_awal:,} ➜ {saldo_akhir:,}")
-# ================= AUTO BISNIS =================
+    # ================= AUTO BISNIS =================
     if "jual" in text and "modal" in text:
         try:
             angka = re.findall(r'\d+', text.replace(".", "").replace(",", ""))
@@ -263,7 +226,6 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
         INSERT INTO transaksi(user_id,type,amount,note,barang,kategori)
         VALUES (?,?,?,?,?,?)
         """, (uid, "income", profit, text, barang, "bisnis"))
-
         conn.commit()
 
         return await update.message.reply_text(
@@ -274,7 +236,40 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Saldo: Rp{saldo_awal:,} ➜ Rp{saldo_akhir:,}"
         )
 
-    # ===== BELI =====
+    # ================= TRANSFER MASUK =================
+    if "dari" in text and jumlah>0:
+        saldo_akhir=saldo_awal+jumlah
+        set_saldo(uid,saldo_akhir)
+
+        cursor.execute("INSERT INTO transaksi(user_id,type,amount,note,person,kategori) VALUES (?,?,?,?,?,?)",
+                       (uid,"income",jumlah,text,person,"transfer"))
+        conn.commit()
+
+        return await update.message.reply_text(f"💰 Dari {person}\nRp{jumlah:,}\n{saldo_awal:,} ➜ {saldo_akhir:,}")
+
+    # ================= TRANSFER KELUAR =================
+    if "ke" in text and jumlah>0:
+        saldo_akhir=saldo_awal-jumlah
+        set_saldo(uid,saldo_akhir)
+
+        cursor.execute("INSERT INTO transaksi(user_id,type,amount,note,person,kategori) VALUES (?,?,?,?,?,?)",
+                       (uid,"expense",jumlah,text,person,"transfer"))
+        conn.commit()
+
+        return await update.message.reply_text(f"💸 Ke {person}\nRp{jumlah:,}\n{saldo_awal:,} ➜ {saldo_akhir:,}")
+
+    # ================= INCOME =================
+    if any(x in text for x in ["masuk","gaji","bonus","tambah","untung"]) and jumlah>0:
+        saldo_akhir=saldo_awal+jumlah
+        set_saldo(uid,saldo_akhir)
+
+        cursor.execute("INSERT INTO transaksi(user_id,type,amount,note,kategori) VALUES (?,?,?,?,?)",
+                       (uid,"income",jumlah,text,"income"))
+        conn.commit()
+
+        return await update.message.reply_text(f"💰 +Rp{jumlah:,}\n{saldo_awal:,} ➜ {saldo_akhir:,}")
+
+    # ================= BELI =================
     if "beli" in text and jumlah>0:
         saldo_akhir=saldo_awal-jumlah
         set_saldo(uid,saldo_akhir)
@@ -285,10 +280,7 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         return await update.message.reply_text(f"📦 {barang}\n-Rp{jumlah:,}\n{saldo_awal:,} ➜ {saldo_akhir:,}")
 
-
-        return await update.message.reply_text(f"📦 {barang}\n-Rp{jumlah:,}\n{saldo_awal:,} ➜ {saldo_akhir:,}")
-
-    # ===== JUAL =====
+    # ================= JUAL =================
     if "jual" in text and jumlah>0:
         saldo_akhir=saldo_awal+jumlah
         set_saldo(uid,saldo_akhir)
@@ -299,7 +291,7 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         return await update.message.reply_text(f"💰 {barang}\n+Rp{jumlah:,}\n{saldo_awal:,} ➜ {saldo_akhir:,}")
 
-    # ===== EXPENSE =====
+    # ================= EXPENSE =================
     if jumlah>0:
         saldo_akhir=saldo_awal-jumlah
         set_saldo(uid,saldo_akhir)
@@ -309,6 +301,9 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.commit()
 
         return await update.message.reply_text(f"💸 -Rp{jumlah:,}\n{saldo_awal:,} ➜ {saldo_akhir:,}")
+     
+
+        
 
 # ================= MAIN =================
 app=ApplicationBuilder().token(TOKEN).build()
