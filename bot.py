@@ -1,191 +1,222 @@
-import os, re, sqlite3, json, requests, asyncio
-from datetime import datetime, timedelta
+import os, re, sqlite3
+from datetime import datetime
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
 
-TOKEN=os.getenv("TOKEN")
-OPENAI_API_KEY=os.getenv("OPENAI_API_KEY")
-OCR_API_KEY=os.getenv("OCR_API_KEY","helloworld")
+TOKEN = os.getenv("TOKEN")
 
-requests.get(f"https://api.telegram.org/bot{TOKEN}/deleteWebhook")
+conn = sqlite3.connect("finance.db", check_same_thread=False)
+cursor = conn.cursor()
 
-conn=sqlite3.connect("finance.db",check_same_thread=False)
-cursor=conn.cursor()
-
-# ================= DB =================
-cursor.execute("CREATE TABLE IF NOT EXISTS users(user_id INTEGER PRIMARY KEY,balance INTEGER DEFAULT 0)")
-cursor.execute("CREATE TABLE IF NOT EXISTS transaksi(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER,type TEXT,amount INTEGER,note TEXT,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
-cursor.execute("CREATE TABLE IF NOT EXISTS debt(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER,name TEXT,amount INTEGER)")
-cursor.execute("CREATE TABLE IF NOT EXISTS barang(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER,nama TEXT,qty INTEGER,harga_beli INTEGER)")
-cursor.execute("CREATE TABLE IF NOT EXISTS recycle_bin(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER,tipe TEXT,data TEXT)")
+# DB
+cursor.execute("CREATE TABLE IF NOT EXISTS users(user_id INTEGER PRIMARY KEY,balance INTEGER)")
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS transaksi(
+id INTEGER PRIMARY KEY AUTOINCREMENT,
+user_id INTEGER,
+type TEXT,
+amount INTEGER,
+note TEXT,
+person TEXT,
+barang TEXT,
+kategori TEXT,
+created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)
+""")
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS debt(
+id INTEGER PRIMARY KEY AUTOINCREMENT,
+user_id INTEGER,
+name TEXT,
+amount INTEGER,
+created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)
+""")
 conn.commit()
 
-# ================= UTIL =================
+# UTIL
 def parse_amount(text):
     text=text.lower().replace(".","").replace(",","")
-    angka=re.findall(r'\d+',text)
-    jumlah=int(angka[0]) if angka else 0
-    if "jt" in text or "juta" in text: jumlah*=1_000_000
-    elif "k" in text or "ribu" in text: jumlah*=1000
-    return jumlah
+    n=re.findall(r'\d+',text)
+    j=int(n[0]) if n else 0
+    if "jt" in text: j*=1_000_000
+    elif "k" in text: j*=1000
+    return j
 
-def get_saldo(uid):
+def saldo(uid):
     cursor.execute("SELECT balance FROM users WHERE user_id=?", (uid,))
     d=cursor.fetchone()
     return d[0] if d else 0
 
 def set_saldo(uid,val):
-    cursor.execute("UPDATE users SET balance=? WHERE user_id=?", (val,uid))
+    cursor.execute("INSERT OR REPLACE INTO users VALUES (?,?)",(uid,val))
 
-def hari_indo(d):
-    return ["Senin","Selasa","Rabu","Kamis","Jumat","Sabtu","Minggu"][d.weekday()]
+def hari(dt):
+    return ["Senin","Selasa","Rabu","Kamis","Jumat","Sabtu","Minggu"][dt.weekday()]
 
-def save_deleted(uid,tipe,data):
-    cursor.execute("INSERT INTO recycle_bin(user_id,tipe,data) VALUES(?,?,?)",(uid,tipe,json.dumps(data)))
-    conn.commit()
-
-# ================= OCR =================
-def ocr_image(url):
-    try:
-        r=requests.post("https://api.ocr.space/parse/image",data={"apikey":OCR_API_KEY,"url":url})
-        return r.json()["ParsedResults"][0]["ParsedText"]
-    except:
-        return ""
-
-# ================= AI =================
-def ai_financial(uid,text):
-    if not OPENAI_API_KEY: return None
-    saldo=get_saldo(uid)
-    cursor.execute("SELECT SUM(amount) FROM transaksi WHERE user_id=? AND type='expense'",(uid,))
-    expense=cursor.fetchone()[0] or 0
-    try:
-        r=requests.post("https://api.openai.com/v1/chat/completions",
-        headers={"Authorization":f"Bearer {OPENAI_API_KEY}","Content-Type":"application/json"},
-        json={"model":"gpt-4o-mini","messages":[
-            {"role":"system","content":f"Saldo:{saldo},Expense:{expense}. Kasih saran keuangan."},
-            {"role":"user","content":text}
-        ]})
-        return r.json()["choices"][0]["message"]["content"]
-    except:
-        return None
-
-# ================= LAPORAN =================
-async def laporan(update,context):
+# HANDLE
+async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid=update.message.from_user.id
-    now=datetime.now()
-    bulan=now.strftime("%Y-%m")
-
-    # income & expense
-    cursor.execute("SELECT type,SUM(amount) FROM transaksi WHERE user_id=? AND strftime('%Y-%m',created_at)=? GROUP BY type",(uid,bulan))
-    income=expense=0
-    for t,j in cursor.fetchall():
-        if t=="income": income=j
-        else: expense=j
-
-    laba=income-expense
-
-    # hutang aktif
-    cursor.execute("SELECT name,SUM(amount) FROM debt WHERE user_id=? GROUP BY name HAVING SUM(amount)>0",(uid,))
-    hutang="\n".join([f"- {n}: Rp{j:,}" for n,j in cursor.fetchall()]) or "- Tidak ada"
-
-    # bulan lalu
-    bulan_lalu=(now.replace(day=1)-timedelta(days=1)).strftime("%Y-%m")
-    cursor.execute("SELECT SUM(amount) FROM transaksi WHERE user_id=? AND type='expense' AND strftime('%Y-%m',created_at)=?",(uid,bulan_lalu))
-    prev=cursor.fetchone()[0] or 0
-    diff=expense-prev
-    status="🔺 Naik" if diff>0 else "🔻 Turun" if diff<0 else "➖ Stabil"
-
-    # detail
-    cursor.execute("SELECT amount,note,created_at FROM transaksi WHERE user_id=? AND strftime('%Y-%m',created_at)=?",(uid,bulan))
-    detail=""
-    for a,n,d in cursor.fetchall():
-        dt=datetime.fromisoformat(d)
-        detail+=f"- {hari_indo(dt)}, {dt.strftime('%d %b')} | {'+' if a>0 else ''}{a:,} ({n})\n"
-
-    text=f"📊 LAPORAN {now.strftime('%B %Y')}\n\n"
-    text+=f"💰 Income: Rp{income:,}\n💸 Expense: Rp{expense:,}\n📈 Laba: Rp{laba:,}\n\n"
-    text+=f"💳 Hutang:\n{hutang}\n\n"
-    text+=f"📉 Bulanan:\nBulan ini:{expense:,}\nBulan lalu:{prev:,}\n{status} Rp{abs(diff):,}\n\n"
-    text+=f"📅 Detail:\n{detail}"
-
-    await update.message.reply_text(text)
-
-# ================= HANDLE =================
-async def handle(update,context):
-    uid=update.message.from_user.id
-    text=update.message.text.lower() if update.message.text else ""
+    text=update.message.text.lower()
 
     cursor.execute("INSERT OR IGNORE INTO users VALUES (?,0)",(uid,))
 
-    if text=="laporan":
-        return await laporan(update,context)
-
     jumlah=parse_amount(text)
-    saldo_awal=get_saldo(uid)
+    saldo_awal=saldo(uid)
 
-    # OCR FOTO
-    if update.message.photo:
-        f=await update.message.photo[-1].get_file()
-        ocr_text=ocr_image(f.file_path)
-        jumlah=parse_amount(ocr_text)
+    words=text.split()
+    person=None
+    barang=None
+    kategori="lainnya"
 
-    # INCOME
-    if any(x in text for x in ["masuk","gaji","bonus","uang masuk","transfer masuk"]):
+    # DETEKSI ORANG
+    if "ke" in words:
+        try: person=words[words.index("ke")+1]
+        except: pass
+    if "dari" in words:
+        try: person=words[words.index("dari")+1]
+        except: pass
+
+    # DETEKSI BARANG
+    if "beli" in words or "jual" in words:
+        try: barang=words[1]
+        except: pass
+
+    # KATEGORI
+    if any(x in text for x in ["makan","minum"]):
+        kategori="makanan"
+
+    # ================= HUTANG =================
+    if "hutang" in text and "bayar" not in text:
+        nama=words[words.index("hutang")+1]
+        cursor.execute("INSERT INTO debt VALUES(NULL,?,?,?,CURRENT_TIMESTAMP)",(uid,nama,jumlah))
+        conn.commit()
+        return await update.message.reply_text(f"🧾 Hutang {nama} Rp{jumlah:,}")
+
+    if "bayar" in text and "hutang" in text:
+        nama=words[words.index("hutang")+1]
+        cursor.execute("INSERT INTO debt VALUES(NULL,?,?,?,CURRENT_TIMESTAMP)",(uid,nama,-jumlah))
+        conn.commit()
+        return await update.message.reply_text(f"💸 Bayar hutang {nama} Rp{jumlah:,}")
+
+    # ================= TRANSFER MASUK =================
+    if "dari" in text:
         saldo_akhir=saldo_awal+jumlah
         set_saldo(uid,saldo_akhir)
 
-        cursor.execute("INSERT INTO transaksi VALUES(NULL,?,?,?,CURRENT_TIMESTAMP)",
-                       (uid,"income",jumlah,text))
+        cursor.execute("""
+        INSERT INTO transaksi(user_id,type,amount,note,person,kategori)
+        VALUES (?,?,?,?,?,?)
+        """,(uid,"income",jumlah,text,person,"transfer"))
+
         conn.commit()
 
         return await update.message.reply_text(
-            f"💰 Income: Rp{jumlah:,}\n"
+            f"💰 Transfer Masuk dari {person}\n"
+            f"Nominal: Rp{jumlah:,}\n"
             f"Saldo awal: Rp{saldo_awal:,}\n"
             f"Penambahan: Rp{jumlah:,}\n"
             f"Saldo akhir: Rp{saldo_akhir:,}"
         )
 
-    # EXPENSE
-    if jumlah>0:
+    # ================= TRANSFER KELUAR =================
+    if "ke" in text:
         saldo_akhir=saldo_awal-jumlah
         set_saldo(uid,saldo_akhir)
 
-        cursor.execute("INSERT INTO transaksi VALUES(NULL,?,?,?,CURRENT_TIMESTAMP)",
-                       (uid,"expense",jumlah,text))
+        cursor.execute("""
+        INSERT INTO transaksi(user_id,type,amount,note,person,kategori)
+        VALUES (?,?,?,?,?,?)
+        """,(uid,"expense",jumlah,text,person,"transfer"))
+
         conn.commit()
 
         return await update.message.reply_text(
-            f"💸 Expense: Rp{jumlah:,}\n"
+            f"💸 Transfer ke {person}\n"
+            f"Nominal: Rp{jumlah:,}\n"
             f"Saldo awal: Rp{saldo_awal:,}\n"
             f"Pengurangan: Rp{jumlah:,}\n"
             f"Saldo akhir: Rp{saldo_akhir:,}"
         )
 
-    # AI
-    ai=ai_financial(uid,text)
-    if ai:
-        await update.message.reply_text(ai)
+    # ================= BELI =================
+    if "beli" in text:
+        saldo_akhir=saldo_awal-jumlah
+        set_saldo(uid,saldo_akhir)
 
-# ================= AUTO LAPORAN =================
-async def auto_laporan(app):
-    while True:
+        cursor.execute("""
+        INSERT INTO transaksi(user_id,type,amount,note,barang,kategori)
+        VALUES (?,?,?,?,?,?)
+        """,(uid,"expense",jumlah,text,barang,"barang"))
+
+        conn.commit()
+
+        return await update.message.reply_text(
+            f"📦 Beli {barang}\n"
+            f"Nominal: Rp{jumlah:,}\n"
+            f"Saldo awal: Rp{saldo_awal:,}\n"
+            f"Pengurangan: Rp{jumlah:,}\n"
+            f"Saldo akhir: Rp{saldo_akhir:,}"
+        )
+
+    # ================= JUAL =================
+    if "jual" in text:
+        saldo_akhir=saldo_awal+jumlah
+        set_saldo(uid,saldo_akhir)
+
+        cursor.execute("""
+        INSERT INTO transaksi(user_id,type,amount,note,barang,kategori)
+        VALUES (?,?,?,?,?,?)
+        """,(uid,"income",jumlah,text,barang,"barang"))
+
+        conn.commit()
+
+        return await update.message.reply_text(
+            f"💰 Jual {barang}\n"
+            f"Nominal: Rp{jumlah:,}\n"
+            f"Saldo awal: Rp{saldo_awal:,}\n"
+            f"Penambahan: Rp{jumlah:,}\n"
+            f"Saldo akhir: Rp{saldo_akhir:,}"
+        )
+
+    # ================= EXPENSE =================
+    if jumlah>0:
+        saldo_akhir=saldo_awal-jumlah
+        set_saldo(uid,saldo_akhir)
+
+        cursor.execute("""
+        INSERT INTO transaksi(user_id,type,amount,note,kategori)
+        VALUES (?,?,?,?,?)
+        """,(uid,"expense",jumlah,text,kategori))
+
+        conn.commit()
+
+        return await update.message.reply_text(
+            f"💸 Pengeluaran ({kategori})\n"
+            f"Nominal: Rp{jumlah:,}\n"
+            f"Saldo awal: Rp{saldo_awal:,}\n"
+            f"Pengurangan: Rp{jumlah:,}\n"
+            f"Saldo akhir: Rp{saldo_akhir:,}"
+        )
+
+    # ================= LAPORAN =================
+    if "laporan" in text:
         now=datetime.now()
-        if now.day==28 and now.hour==9:
-            cursor.execute("SELECT user_id FROM users")
-            for (uid,) in cursor.fetchall():
-                try:
-                    await app.bot.send_message(uid,"📊 Laporan otomatis tersedia")
-                except: pass
-        await asyncio.sleep(3600)
 
-# ================= MAIN =================
+        # hutang detail
+        cursor.execute("SELECT name,amount,created_at FROM debt WHERE user_id=?",(uid,))
+        hutang_txt=""
+        for n,a,d in cursor.fetchall():
+            dt=datetime.fromisoformat(d)
+            hutang_txt+=f"- {n} Rp{a:,} ({dt.strftime('%d %b')})\n"
+
+        await update.message.reply_text(
+            f"📊 LAPORAN\n\n"
+            f"💰 Saldo: Rp{saldo(uid):,}\n\n"
+            f"💳 Hutang Detail:\n{hutang_txt}"
+        )
+
+# MAIN
 app=ApplicationBuilder().token(TOKEN).build()
-app.add_handler(CommandHandler("laporan",laporan))
-app.add_handler(MessageHandler(filters.ALL,handle))
+app.add_handler(MessageHandler(filters.TEXT, handle))
 
-async def main():
-    asyncio.create_task(auto_laporan(app))
-    print("🔥 FULL SYSTEM AKTIF (SEMUA FITUR)")
-    await app.run_polling()
-
-asyncio.run(main())
+print("🔥 FINAL ALL IN AKTIF")
+app.run_polling()
