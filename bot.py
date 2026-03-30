@@ -157,10 +157,24 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
             dt=datetime.fromisoformat(d)
             trx+=f"{hari(dt)} Rp{a:,} ({t})\n"
 
-        cursor.execute("SELECT name,amount FROM debt WHERE user_id=?", (uid,))
-        hutang=""
-        for n,a in cursor.fetchall():
-            hutang+=f"- {n} Rp{a:,}\n"
+        # ===== HUTANG PER ORANG =====
+        cursor.execute("""
+        SELECT name, SUM(amount) 
+        FROM debt 
+        WHERE user_id=? 
+        GROUP BY name
+        """, (uid,))
+
+hutang = ""
+
+for n, total in cursor.fetchall():
+    if total > 0:
+        hutang += f"- {n}: Rp{total:,} (BELUM LUNAS)\n"
+    elif total == 0:
+        hutang += f"- {n}: LUNAS ✅\n"
+
+if hutang == "":
+    hutang = "Tidak ada"
 
         return await update.message.reply_text(
             f"📊 LAPORAN\n\n"
