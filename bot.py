@@ -1,3 +1,10 @@
+import requests
+import os
+
+TOKEN = os.getenv("TOKEN")
+
+# MATIKAN SEMUA SESSION LAMA
+requests.get(f"https://api.telegram.org/bot{TOKEN}/deleteWebhook?drop_pending_updates=true")
 import os, re, sqlite3, json
 from datetime import datetime
 from telegram import Update
