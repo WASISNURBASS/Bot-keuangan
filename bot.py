@@ -296,19 +296,47 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     # ================= LAPORAN =================
-    if "laporan" in text:
-        cursor.execute("SELECT name,amount,created_at FROM debt WHERE user_id=?", (uid,))
-        hutang = ""
+if "laporan" in text:
+    # ===== TOTAL INCOME =====
+    cursor.execute("SELECT SUM(amount) FROM transaksi WHERE user_id=? AND type='income'", (uid,))
+    income = cursor.fetchone()[0] or 0
 
-        for n, a, d in cursor.fetchall():
-            dt = datetime.fromisoformat(d)
-            hutang += f"- {n} Rp{a:,} ({dt.strftime('%d %b')})\n"
+    # ===== TOTAL EXPENSE =====
+    cursor.execute("SELECT SUM(amount) FROM transaksi WHERE user_id=? AND type='expense'", (uid,))
+    expense = cursor.fetchone()[0] or 0
 
-        return await update.message.reply_text(
-            f"📊 LAPORAN\n\n"
-            f"💰 Saldo: Rp{get_saldo(uid):,}\n\n"
-            f"💳 Hutang:\n{hutang}"
-        )
+    laba = income - expense
+
+    # ===== TRANSAKSI TERAKHIR =====
+    cursor.execute("""
+    SELECT type, amount, note, created_at 
+    FROM transaksi 
+    WHERE user_id=? 
+    ORDER BY id DESC LIMIT 5
+    """, (uid,))
+    transaksi = ""
+
+    for t, a, n, d in cursor.fetchall():
+        dt = datetime.fromisoformat(d)
+        transaksi += f"{hari(dt)} - Rp{a:,} ({t})\n"
+
+    # ===== HUTANG =====
+    cursor.execute("SELECT name,amount,created_at FROM debt WHERE user_id=?", (uid,))
+    hutang = ""
+
+    for n, a, d in cursor.fetchall():
+        dt = datetime.fromisoformat(d)
+        hutang += f"- {n} Rp{a:,} ({dt.strftime('%d %b')})\n"
+
+    return await update.message.reply_text(
+        f"📊 LAPORAN LENGKAP\n\n"
+        f"💰 Saldo: Rp{get_saldo(uid):,}\n\n"
+        f"📈 Income: Rp{income:,}\n"
+        f"📉 Expense: Rp{expense:,}\n"
+        f"🔥 Laba/Rugi: Rp{laba:,}\n\n"
+        f"🧾 Transaksi Terakhir:\n{transaksi}\n"
+        f"💳 Hutang:\n{hutang if hutang else 'Tidak ada'}"
+    )
 
 # ================= MAIN =================
 app=ApplicationBuilder().token(TOKEN).build()
