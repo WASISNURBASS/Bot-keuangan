@@ -38,17 +38,46 @@ created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)
 conn.commit()
 
 # ================= UTIL =================
+def clean_text(text):
+    return text.lower().replace(".", "").replace(",", "")
+
 def parse_amount(text):
-    text=text.lower().replace(".","").replace(",","")
-    angka=re.findall(r'\d+',text)
-    jumlah=int(angka[0]) if angka else 0
-    if "jt" in text: jumlah*=1_000_000
-    elif "k" in text: jumlah*=1000
+    text = clean_text(text)
+    angka = re.findall(r'\d+', text)
+    if not angka:
+        return 0
+
+    jumlah = int(angka[0])
+
+    if "jt" in text:
+        jumlah *= 1_000_000
+    elif "k" in text or "rb" in text:
+        jumlah *= 1000
+
     return jumlah
+
+def parse_dual(text):
+    text = clean_text(text)
+    angka = re.findall(r'\d+', text)
+
+    if len(angka) < 2:
+        return 0,0
+
+    a = int(angka[0])
+    b = int(angka[1])
+
+    if "k" in text or "rb" in text:
+        a *= 1000
+        b *= 1000
+    if "jt" in text:
+        a *= 1_000_000
+        b *= 1_000_000
+
+    return a,b
 
 def get_saldo(uid):
     cursor.execute("SELECT balance FROM users WHERE user_id=?", (uid,))
-    d=cursor.fetchone()
+    d = cursor.fetchone()
     return d[0] if d else 0
 
 def set_saldo(uid,val):
@@ -59,43 +88,16 @@ def hari(dt):
 
 # ================= COMMAND =================
 async def saldo_cmd(update,context):
-    uid=update.message.from_user.id
+    uid = update.message.from_user.id
     await update.message.reply_text(f"💰 Saldo: Rp{get_saldo(uid):,}")
 
 async def reset_all(update,context):
-    uid=update.message.from_user.id
+    uid = update.message.from_user.id
     cursor.execute("DELETE FROM transaksi WHERE user_id=?", (uid,))
     cursor.execute("DELETE FROM debt WHERE user_id=?", (uid,))
     cursor.execute("UPDATE users SET balance=0 WHERE user_id=?", (uid,))
     conn.commit()
     await update.message.reply_text("🔥 Semua data direset")
-
-async def hapus_hutang(update,context):
-    uid=update.message.from_user.id
-    nama=context.args[0]
-    cursor.execute("DELETE FROM debt WHERE user_id=? AND name=?", (uid,nama))
-    conn.commit()
-    await update.message.reply_text(f"🗑️ Hutang {nama} dihapus")
-
-async def hapus_terakhir(update,context):
-    uid=update.message.from_user.id
-    cursor.execute("SELECT id,amount,type FROM transaksi WHERE user_id=? ORDER BY id DESC LIMIT 1",(uid,))
-    data=cursor.fetchone()
-
-    if not data:
-        return await update.message.reply_text("❌ Tidak ada data")
-
-    id_,amount,type_=data
-    saldo_now=get_saldo(uid)
-
-    if type_=="income":
-        set_saldo(uid,saldo_now-amount)
-    else:
-        set_saldo(uid,saldo_now+amount)
-
-    cursor.execute("DELETE FROM transaksi WHERE id=?", (id_,))
-    conn.commit()
-    await update.message.reply_text("🗑️ Transaksi terakhir dihapus")
 
 # ================= HANDLE =================
 async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -138,7 +140,7 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         laba = income - expense
 
-        # transaksi
+        # transaksi terakhir
         cursor.execute("SELECT type, amount, created_at FROM transaksi WHERE user_id=? ORDER BY id DESC LIMIT 5",(uid,))
         trx=""
         for t,a,d in cursor.fetchall():
@@ -151,14 +153,22 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for n,total in cursor.fetchall():
             if total > 0:
                 hutang += f"- {n}: Rp{total:,}\n"
+            elif total == 0:
+                hutang += f"- {n}: LUNAS ✅\n"
 
         if hutang=="": hutang="Tidak ada"
 
-        # kategori
-        cursor.execute("SELECT kategori, SUM(amount) FROM transaksi WHERE user_id=? GROUP BY kategori",(uid,))
+        # kategori (pisah income & expense)
+        cursor.execute("""
+        SELECT kategori, type, SUM(amount) 
+        FROM transaksi 
+        WHERE user_id=? 
+        GROUP BY kategori, type
+        """, (uid,))
+
         kategori_text=""
-        for k,total in cursor.fetchall():
-            kategori_text+=f"- {k}: Rp{total:,}\n"
+        for k,t,total in cursor.fetchall():
+            kategori_text+=f"- {k} ({t}): Rp{total:,}\n"
 
         if kategori_text=="": kategori_text="Tidak ada"
 
@@ -188,9 +198,7 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ================= AUTO BISNIS =================
     if "jual" in text and "modal" in text:
-        angka = re.findall(r'\d+', text.replace(".", "").replace(",", ""))
-        jual = int(angka[0])
-        modal = int(angka[1])
+        jual, modal = parse_dual(text)
 
         profit = jual - modal
         saldo_akhir = saldo_awal + profit
@@ -198,47 +206,49 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         barang = words[1] if len(words) > 1 else "barang"
 
-        cursor.execute("INSERT INTO transaksi(user_id,type,amount,note,barang,kategori) VALUES (?,?,?,?,?,?)",
-                       (uid,"income",profit,text,barang,"bisnis"))
+        cursor.execute("INSERT INTO transaksi VALUES(NULL,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)",
+                       (uid,"income",profit,text,None,barang,"bisnis"))
         conn.commit()
 
-        return await update.message.reply_text(f"🔥 Profit Rp{profit:,}\n{saldo_awal:,} ➜ {saldo_akhir:,}")
+        return await update.message.reply_text(
+            f"🔥 Profit Rp{profit:,}\n{saldo_awal:,} ➜ {saldo_akhir:,}"
+        )
 
     # ================= TRANSAKSI =================
     if "dari" in text and jumlah>0:
         saldo_akhir+=jumlah
-        set_saldo(uid,saldo_akhir)
-        cursor.execute("INSERT INTO transaksi VALUES(NULL,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)",
-                       (uid,"income",jumlah,text,person,None,"transfer"))
+        kategori="transfer"
+        tipe="income"
 
     elif "ke" in text and jumlah>0:
         saldo_akhir-=jumlah
-        set_saldo(uid,saldo_akhir)
-        cursor.execute("INSERT INTO transaksi VALUES(NULL,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)",
-                       (uid,"expense",jumlah,text,person,None,"transfer"))
+        kategori="transfer"
+        tipe="expense"
 
     elif "beli" in text and jumlah>0:
         saldo_akhir-=jumlah
-        set_saldo(uid,saldo_akhir)
-        cursor.execute("INSERT INTO transaksi VALUES(NULL,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)",
-                       (uid,"expense",jumlah,text,None,barang,"barang"))
+        kategori="barang"
+        tipe="expense"
 
     elif any(x in text for x in ["masuk","gaji","bonus","tambah","untung"]) and jumlah>0:
         saldo_akhir+=jumlah
-        set_saldo(uid,saldo_akhir)
-        cursor.execute("INSERT INTO transaksi VALUES(NULL,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)",
-                       (uid,"income",jumlah,text,None,None,"income"))
+        kategori="income"
+        tipe="income"
 
     elif jumlah>0:
         saldo_akhir-=jumlah
-        set_saldo(uid,saldo_akhir)
-        cursor.execute("INSERT INTO transaksi VALUES(NULL,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)",
-                       (uid,"expense",jumlah,text,None,None,"lainnya"))
+        kategori="lainnya"
+        tipe="expense"
 
     else:
         return
 
+    set_saldo(uid,saldo_akhir)
+
+    cursor.execute("INSERT INTO transaksi VALUES(NULL,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)",
+                   (uid,tipe,jumlah,text,person,barang,kategori))
     conn.commit()
+
     return await update.message.reply_text(f"💰 Rp{saldo_awal:,} ➜ Rp{saldo_akhir:,}")
 
 # ================= MAIN =================
@@ -246,10 +256,7 @@ app=ApplicationBuilder().token(TOKEN).build()
 
 app.add_handler(CommandHandler("saldo", saldo_cmd))
 app.add_handler(CommandHandler("reset", reset_all))
-app.add_handler(CommandHandler("hapus_hutang", hapus_hutang))
-app.add_handler(CommandHandler("hapus", hapus_terakhir))
-
 app.add_handler(MessageHandler(filters.TEXT, handle))
 
-print("🔥 BOT SIAP FULL FITUR")
+print("🔥 BOT SUPER JOSS AKTIF")
 app.run_polling()
